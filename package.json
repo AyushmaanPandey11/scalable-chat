@@ -1,0 +1,28 @@
+{
+  "name": "scalable-chat",
+  "version": "1.0.0",
+  "description": "horizontal scalable websocket",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/index.js",
+    "dev": "npm run build && npm run start"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AyushmaanPandey11/scalable-chat.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/AyushmaanPandey11/scalable-chat/issues"
+  },
+  "homepage": "https://github.com/AyushmaanPandey11/scalable-chat#readme",
+  "dependencies": {
+    "@types/redis": "^4.0.10",
+    "@types/ws": "^8.18.1",
+    "redis": "^5.7.0",
+    "ws": "^8.18.3"
+  }
+}
