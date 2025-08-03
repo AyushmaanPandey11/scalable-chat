@@ -1,7 +1,12 @@
 import { RedisClientType } from "@redis/client";
 import { createClient } from "redis";
 import { WebSocket } from "ws";
-import { joinRoomType, MessageBody } from "./types";
+import {
+  joinRoomType,
+  leaveRoomType,
+  SEND_MESSAGE,
+  sendMessageType,
+} from "./types";
 
 interface UserSubscription {
   [key: string]: {
@@ -30,6 +35,12 @@ export class WsManager {
     this.subscribeClient.connect();
     this.subscriptions = {};
     this.reverseSubscriptions = {};
+    this.publishClient.on("error", (err) =>
+      console.error("Publish client error:", err)
+    );
+    this.subscribeClient.on("error", (err) =>
+      console.error("Subscribe client error:", err)
+    );
   }
 
   public static getInstance() {
@@ -39,33 +50,123 @@ export class WsManager {
     return this.instance;
   }
 
-  public joinRoom(message: MessageBody, userWs: WebSocket) {
+  public joinRoom(message: string, userWs: WebSocket) {
+    const parsedMessage: joinRoomType = JSON.parse(message);
     const userId = this.getRandomId();
-    const roomId = message.payload.roomId;
+    const roomId = parsedMessage.payload.roomId;
     this.subscriptions[userId] = {
       ws: userWs,
-      rooms: (this.subscriptions[userId].rooms || []).concat(
-        message.payload.roomId
+      rooms: (this.subscriptions[userId]?.rooms || []).concat(
+        parsedMessage.payload.roomId
       ),
-      name: message.payload.name,
+      name: parsedMessage.payload.name,
     };
-    this.reverseSubscriptions[roomId].push(userId);
-
+    if (this.reverseSubscriptions[roomId]) {
+      this.reverseSubscriptions[roomId].push(userId);
+    } else {
+      this.reverseSubscriptions[roomId] = [userId];
+    }
     if (this.isNewRoom(roomId)) {
-      this.publishClient.subscribe(roomId, (message) => {
-        const parsedMessage: MessageBody = JSON.parse(message);
+      this.subscribeClient.subscribe(roomId, (message) => {
+        const parsedMessage: sendMessageType = JSON.parse(message);
         this.reverseSubscriptions[parsedMessage.payload.roomId].forEach(
           (user) => {
-            const { ws, name } = this.subscriptions[user];
-            ws.send(`${name} has joined the room`);
+            if (
+              this.subscriptions[user] &&
+              this.subscriptions[user].name !== parsedMessage.payload.name
+            ) {
+              const { ws } = this.subscriptions[user];
+              ws.send(
+                JSON.stringify({
+                  message: parsedMessage.payload.message,
+                  sender: parsedMessage.payload.name,
+                })
+              );
+            }
           }
         );
       });
     }
+    userWs.send(
+      JSON.stringify({ name: parsedMessage.payload.name, userId: userId })
+    );
+    this.publishClient.publish(
+      roomId,
+      JSON.stringify({
+        type: SEND_MESSAGE,
+        payload: {
+          message: `${parsedMessage.payload.name} has joined the room`,
+          roomId: roomId,
+          name: parsedMessage.payload.name,
+        },
+      })
+    );
   }
 
-  isNewRoom(roomId: string) {
-    return this.reverseSubscriptions[roomId].length === 1;
+  public leaveRoom(message: string) {
+    const parsedMessage: leaveRoomType = JSON.parse(message);
+    const { userId, name, roomId } = parsedMessage.payload;
+
+    if (this.subscriptions[userId]) {
+      this.subscriptions[userId].rooms = this.subscriptions[
+        userId
+      ].rooms.filter((room) => room !== roomId);
+
+      this.reverseSubscriptions[roomId] =
+        this.reverseSubscriptions[roomId]?.filter((user) => user !== userId) ||
+        [];
+
+      if (this.isRoomEmpty(roomId)) {
+        this.subscribeClient.unsubscribe(roomId);
+        delete this.reverseSubscriptions[roomId];
+      }
+
+      if (this.subscriptions[userId].rooms.length === 0) {
+        delete this.subscriptions[userId];
+      }
+    }
+    this.publishClient.publish(
+      roomId,
+      JSON.stringify({
+        type: SEND_MESSAGE,
+        payload: {
+          message: `${name} has left the room`,
+          roomId: roomId,
+          name: name,
+        },
+      })
+    );
+  }
+
+  public shareMessage(messageBody: string) {
+    const parsedMessage: sendMessageType = JSON.parse(messageBody);
+    const { roomId, message, name } = parsedMessage.payload;
+
+    this.publishClient.publish(
+      roomId,
+      JSON.stringify({
+        type: SEND_MESSAGE,
+        payload: {
+          message: message,
+          roomId: roomId,
+          name: name,
+        },
+      })
+    );
+  }
+
+  private isNewRoom(roomId: string) {
+    return (
+      !this.reverseSubscriptions[roomId] ||
+      this.reverseSubscriptions[roomId].length === 1
+    );
+  }
+
+  private isRoomEmpty(roomId: string) {
+    return (
+      !this.reverseSubscriptions[roomId] ||
+      this.reverseSubscriptions[roomId].length === 0
+    );
   }
 
   private getRandomId() {
